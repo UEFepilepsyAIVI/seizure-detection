@@ -1,0 +1,224 @@
+'Multi file seizure detection algorithm.
+'Version:1.0
+'Last update:10/11/2017
+'Developer: Pedro Andrade
+'contact:pedro.andrade@uef.fi
+
+#include <ghutils.s2s>	                    'Library of script functions
+
+const mask$ := "*.smrx";                    'Change the mask to get a subset of smrx files by name
+
+var files$[1000];		                    'Array to hold up to 1000 files
+var numFiles%;			                    'Number of files found
+var c%, h%;			                        'Counter to loop through files, file handle
+
+'____________________________________Var for analyses________________________________________
+
+var list%[1000],i%,Evts%,path$,ext$,type%,nameW$,name1$;         'Var for the save results
+var Ch$[10],expr$, nCh$;                                         'Find Chanels
+var Vch%;                                                        'Created virtual channel
+var FIRch%;                                                      'Channel created for FiltApply
+var Szch%, Amp%;
+var Mch%;                                                        'MemChan created channel
+
+'_____________________________________________________________________________________
+
+FilePathSet("",0,"Select data directory");	'Prompts user to select directory
+path$:=FilePath$();                         'Select directory to save files
+FilePathSet(path$);                         'Make this the current directory  
+
+numFiles%:= FileList(files$[], 0, mask$);   'Fill array with filenames
+if numFiles%<1 then							'If no files found or an error...
+	Message("No data files in directory!");	'Display message and end script
+    halt;
+endif;
+
+for c%:=0 to numFiles%-1 do			        'Loop through each file
+    h% := FileOpen(files$[c%], 0, 2);       'Open the file
+    if (h% >= 0) then                       'If the open worked OK
+        HandleFile(h%, files$[c%]);         'Do Analysis
+        view(h%);
+        FileClose(1, -1);                   'Close file
+    endif;
+next;
+
+halt;
+
+var timevh%;
+FindView(timevh%,0);	                               'Find an open time view and bring it to the front
+if ViewKind(timevh%)<>0 then
+    Message("Time view not found.");
+    
+    halt;
+endif;                                                 'Found the view to work on
+
+
+Func HandleFile(hand%, name$);                         'Function that handles and analyses the files
+
+MarkCh();
+
+VirtualCh();
+
+Report();
+
+Fim();
+
+return 0;
+end
+
+
+Func ExPr();                                           'Function to create average channel
+
+var list%[100], nCh%;
+
+nCh% := ChanList(list%, 1);
+Ch$[0]:=Print$(list%[1]);
+Ch$[1]:=Print$(list%[2]);
+Ch$[2]:=Print$(list%[3]);
+Ch$[3]:=Print$(list%[4]);
+nCh$:=Print$(nCh%);
+
+if nCh%=2 then
+    expr$:= "(ch("+Ch$[0]+")+ch("+Ch$[1]+"))/"+nCh$;
+endif;
+
+if nCh%=3 then
+    expr$:= "(ch("+Ch$[0]+")+ch("+Ch$[1]+")+ch("+Ch$[2]+"))/"+nCh$;
+endif;
+
+if nCh%=4 then
+    expr$:= "(ch("+Ch$[0]+")+ch("+Ch$[1]+")+ch("+Ch$[2]+")+ch("+Ch$[3]+"))/"+nCh$;
+endif;
+
+end
+
+
+Func VirtualCh(); 'Function that creates virtual channel
+
+FrontView(timevh%);
+ExPr();
+Vch% := VirtualChan(Vch%, expr$, 0, 0.01, 0);  'Edit virtual channel
+ChanShow(Vch%); 'Make it visible
+Filter();
+
+End;
+
+
+Func Filter(); 'Function that creates Power channel
+
+FrontView(timevh%);
+FiltCreate(-1, 4, 16.4, 30, 70); 'FIR Band pass
+FIRch% := FiltApply(-1, 0, Vch%, 0.000000, MaxTime(), 1); 'Apply created filter
+ChanShow(FIRch%); 'Show the result
+ChanProcessAdd(FIRch%, 0); 'Add Rectify to channel
+YRange(FIRch%, 0, 300);
+
+end;
+
+
+Func ActivCursor(); 'Function that searches for the peak of power
+
+var t%,width%;
+
+Amp%:=150;
+width%:=10;
+CursorActive(0,7, FIRch%, width%, "", "", Amp%, 0, 0);   'Rising threshold
+CursorNew(0,1);
+CursorActive(1,2, FIRch%, "Cursor(0)", "Cursor(0)-10", "");   'Minimum value
+CursorNew(0,2);
+CursorActive(2,2, FIRch%, "Cursor(0)", "Cursor(0)+30", "");   'Minimum value
+for t%:=0 to maxtime()-1 do
+    CursorSearch(0);
+    Mark();  
+next;
+
+End;
+
+
+Func MarkCh(); 'Creation of the comment channel
+
+Mch% := MemChan(8, 32); 'Add new TextMark channel
+ChanShow(Mch%); 'Make it visible
+
+end
+
+
+'_____________Mark__________________
+Func Mark(); 'Creation of the marking
+
+var codes%[4]; 'For marker codes
+ArrConst(codes%, 0); 'Zero all codes
+codes%[0]:=0;
+codes%[1]:=1;
+MemSetItem(Mch%, 0,Cursor(1), codes%[1], "Sz"); 'Add TextMark item
+ArrConst(codes%, 0); 'Zero all codes
+MemSetItem(Mch%, 0,Cursor(2), codes%[0], ""); 'Add TextMark item
+DrawMode(Mch%,15,1, 0,0); 'Set State
+MarkShow(Mch%, 0, 0); 'Set marker to display and mode
+
+End
+
+
+Func Report(); 'Report of the results
+var pos1,pos2,code%[1000];	                                  
+
+repeat
+    
+    pos1:=NextTime(Mch%,pos1,code%[]); 
+    if code%[0]=01 and pos1<>-1 then
+        PrintLog("\n Start %g\n",pos1) 
+        'Processing goes here
+    endif    
+    pos2:=NextTime(Mch%,pos2,code%[]);
+    if code%[0]=00 and pos2<>-1 then
+        PrintLog("End %g\n",pos2);
+        'Processing goes here
+    endif
+   
+until pos1=-1 or pos2=-1;
+
+PrintLog(Count(Mch%, 0.0, MaxTime())/2);
+end
+
+
+Func SaveLog(); 'File creation of results report
+
+ext$:= ".txt";
+type%:= 1;
+    
+    View(timevh%);
+    nameW$:= WindowTitle$();
+
+    View(LogHandle());
+    name1$:=(path$+"Log "+nameW$+ext$);
+        
+    FileSaveAs(name1$ ,type%,-1);               'Save as (-1 to replace if already exists)
+    PrintLog(nameW$);
+
+end
+
+
+Func ClearLog();
+
+LogHandle();
+EditSelectAll();
+EditClear();
+
+end
+
+
+Func Fim(); 'Delete and clean all of the intermediary unnecessary steps
+
+var Mch2%,FIRch2%;
+CursorSet(0);
+Cursor(0,0);
+ChanDelete(Vch%, 0);
+Mch2%:=ChanSave(Mch%, 0);
+ChanDelete(Mch%, 0);
+ChanShow(Mch2%);
+FIRch2%:=ChanSave(FIRch%, 0);
+ChanShow(FIRch2%);
+ChanDelete(FIRch%, 0);
+SaveLog();
+ClearLog();
+end
